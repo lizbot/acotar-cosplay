@@ -13,7 +13,7 @@
  *
  * Click/tap anywhere on the page (except links, buttons, or
  * elements with data-no-star) to shoot a star through that spot.
- * Every 20 seconds a Starfall event releases a shower of stars.
+ * Every 15 seconds a Starfall event releases a shower of stars.
  */
 
 'use strict';
@@ -68,11 +68,13 @@ const SFCFG = {
   SHOOT_DURATION_MAX:   1.3,
   SHOOT_REGROW_RADIUS:  40,      // px — stars within this range flash
   SHOOT_REGROW_DUR:     2.0,     // seconds for regrow boost to decay
-  SHOOT_PARTICLE_MIN:   2,       // dust particles spawned per tick
-  SHOOT_PARTICLE_MAX:   3,
+  SHOOT_COLOR:          '#57f3de', // blue-green cyan for every shooting star
+  SHOOT_CORE_COLOR:     '#d4fffa', // pale cyan-white core
+  SHOOT_DUST_RATE:      75,       // particles per second, independent of frame rate
+  SHOOT_DUST_MAX:       650,      // bound work during a meteor shower
 
   // ── Starfall event (periodic meteor shower) ───────────────────────
-  STARFALL_INTERVAL:    20,      // seconds between Starfall events
+  STARFALL_INTERVAL:    15,      // seconds between shower starts
   STARFALL_COUNT_MIN:   10,      // shooting stars per event
   STARFALL_COUNT_MAX:   16,
   STARFALL_SPREAD:      4,       // seconds to stagger all launches
@@ -170,7 +172,17 @@ function buildSprites() {
     sctx.restore();
   });
 
-  return { byLayer, sparkle: sc, maxR };
+  // Shared cyan dust sprite: soft halo and a tiny bright core.
+  const dust = document.createElement('canvas'); dust.width = dust.height = 24;
+  const dc = dust.getContext('2d');
+  const [dr, dg, db] = hexRGB(SFCFG.SHOOT_COLOR);
+  const glow = dc.createRadialGradient(12, 12, 0, 12, 12, 12);
+  glow.addColorStop(0, SFCFG.SHOOT_CORE_COLOR);
+  glow.addColorStop(.12, `rgba(${dr},${dg},${db},.9)`);
+  glow.addColorStop(.38, `rgba(${dr},${dg},${db},.2)`);
+  glow.addColorStop(1, `rgba(${dr},${dg},${db},0)`);
+  dc.fillStyle = glow; dc.fillRect(0, 0, 24, 24);
+  return { byLayer, sparkle: sc, dust, maxR };
 }
 
 
@@ -325,7 +337,7 @@ class ShootingStar {
 
     this.t    = 0;
     this.done = false;
-    this.particleCD = rand(0.10, 0.18);
+    this.dustCarry = 0;
   }
 
   get headX() { return this.startX + this.dx * this.totalLen * this.t; }
@@ -340,6 +352,7 @@ class ShootingStar {
 
   update(dt, stars, particles) {
     const C  = SFCFG;
+    const previousX = this.headX, previousY = this.headY;
     this.t  += dt / this.dur;
     if (this.t >= 1) { this.t = 1; this.done = true; }
 
@@ -354,12 +367,17 @@ class ShootingStar {
         s.regrowBoost = Math.max(s.regrowBoost, 1);
     }
 
-    // Spawn dust particles behind the head while in motion
-    this.particleCD -= dt;
-    if (this.particleCD <= 0 && this.t > 0.05 && this.t < 0.90) {
-      this.particleCD = rand(0.10, 0.18);
-      const n = randI(C.SHOOT_PARTICLE_MIN, C.SHOOT_PARTICLE_MAX);
-      for (let i = 0; i < n; i++) particles.push(new Particle(hx, hy));
+    // Sample the travelled segment so fast stars leave a continuous dust wake.
+    if (this.t > .05 && this.t < .95) {
+      this.dustCarry += dt * C.SHOOT_DUST_RATE * this.brite;
+      const count = Math.floor(this.dustCarry); this.dustCarry -= count;
+      for (let i = 0; i < count && particles.length < C.SHOOT_DUST_MAX; i++) {
+        const f = (i + Math.random()) / count, spread = rand(-3, 3);
+        const x = lerp(previousX, hx, f) - this.dx * rand(0, 12) - this.dy * spread;
+        const y = lerp(previousY, hy, f) - this.dy * rand(0, 12) + this.dx * spread;
+        if (x >= -24 && x <= window.innerWidth + 24 && y >= -24 && y <= window.innerHeight + 24)
+          particles.push(new Particle(x, y, -this.dx, -this.dy));
+      }
     }
   }
 
@@ -375,13 +393,16 @@ class ShootingStar {
     // Skip degenerate gradient (head and tail at same pixel)
     if (trailPx < 1) return;
 
+    const [r, g, b] = hexRGB(SFCFG.SHOOT_COLOR);
+    const [hr, hgColor, hb] = hexRGB(SFCFG.SHOOT_CORE_COLOR);
     ctx.save();
+    ctx.globalCompositeOperation = 'screen';
     try {
-      // Tapered gradient trail
+      // Tapered cyan gradient trail
       const tg = ctx.createLinearGradient(hx, hy, tx, ty);
-      tg.addColorStop(0,    `rgba(255,248,200,${op})`);
-      tg.addColorStop(0.25, `rgba(255,242,180,${(op * 0.55).toFixed(3)})`);
-      tg.addColorStop(1,    'rgba(255,238,170,0)');
+      tg.addColorStop(0,    `rgba(${hr},${hgColor},${hb},${op})`);
+      tg.addColorStop(0.25, `rgba(${r},${g},${b},${(op * 0.75).toFixed(3)})`);
+      tg.addColorStop(1,    `rgba(${r},${g},${b},0)`);
       ctx.strokeStyle = tg;
       ctx.lineWidth   = clamp(1.4 * this.brite, 0.8, 2.5);
       ctx.lineCap     = 'round';
@@ -394,9 +415,9 @@ class ShootingStar {
     try {
       // Bright head glow
       const hg = ctx.createRadialGradient(hx, hy, 0, hx, hy, 7);
-      hg.addColorStop(0,   `rgba(255,252,230,${op})`);
-      hg.addColorStop(0.4, `rgba(255,240,180,${(op * 0.4).toFixed(3)})`);
-      hg.addColorStop(1,   'rgba(255,230,160,0)');
+      hg.addColorStop(0,   `rgba(${hr},${hgColor},${hb},${op})`);
+      hg.addColorStop(0.4, `rgba(${r},${g},${b},${(op * 0.6).toFixed(3)})`);
+      hg.addColorStop(1,   `rgba(${r},${g},${b},0)`);
       ctx.fillStyle = hg;
       ctx.beginPath();
       ctx.arc(hx, hy, 7, 0, Math.PI * 2);
@@ -412,22 +433,22 @@ class ShootingStar {
 //  CLASS: Particle — glittering dust left in a shooting star's wake
 // ═══════════════════════════════════════════════════════════════════
 class Particle {
-  constructor(x, y) {
+  constructor(x, y, driftX = 0, driftY = 0) {
     this.x  = x;
     this.y  = y;
-    const spd = rand(8, 45), dir = rand(0, Math.PI * 2);
-    this.vx   = Math.cos(dir) * spd;
-    this.vy   = Math.sin(dir) * spd;
+    const spd = rand(3, 14), dir = rand(0, Math.PI * 2);
+    this.vx   = Math.cos(dir) * spd + driftX * rand(4, 12);
+    this.vy   = Math.sin(dir) * spd + driftY * rand(4, 12);
     this.life = 1;
-    this.decay = rand(0.8, 1.8);  // life fraction lost per second
-    this.r    = rand(0.5, 1.6);
+    this.decay = rand(.32, .55); // dust lingers for roughly 2–3 seconds
+    this.r    = rand(.7, 1.7);
     this.done = false;
   }
 
   update(dt) {
     this.x  += this.vx * dt;
     this.y  += this.vy * dt;
-    this.vy += 12 * dt;                         // gentle gravity
+    this.vy += 3 * dt;                         // gentle gravity
     const drag = Math.pow(0.92, dt * 60);       // frame-rate-independent drag
     this.vx   *= drag;
     this.vy   *= drag;
@@ -435,12 +456,10 @@ class Particle {
     if (this.life <= 0) { this.life = 0; this.done = true; }
   }
 
-  draw(ctx) {
-    ctx.globalAlpha = this.life * this.life;    // quadratic fade
-    ctx.fillStyle   = '#fff5e0';
-    ctx.beginPath();
-    ctx.arc(this.x, this.y, this.r, 0, Math.PI * 2);
-    ctx.fill();
+  draw(ctx, sprite) {
+    ctx.globalAlpha = Math.pow(this.life, 1.5);
+    const size = this.r * 8;
+    ctx.drawImage(sprite, this.x - size / 2, this.y - size / 2, size, size);
     ctx.globalAlpha = 1;
   }
 }
@@ -584,6 +603,7 @@ class Particle {
     sfActive      = true;
     sfWashPhase   = 'in';
     sfWashT       = 0;
+    scheduleStarfall(); // Schedule from this start, not from the end of the wash.
 
     const count   = randI(C.STARFALL_COUNT_MIN, C.STARFALL_COUNT_MAX);
     const baseAng = C.STARFALL_ANGLE_BASE + rand(-C.STARFALL_ANGLE_VAR, C.STARFALL_ANGLE_VAR);
@@ -619,7 +639,6 @@ class Particle {
       sfWashT     = 0;
       sfActive    = false;
       sparkleWave();
-      scheduleStarfall();
     }, washInMs + washHoldMs + washOutMs);
   }
 
@@ -702,7 +721,7 @@ class Particle {
     for (const sh of shooters) sh.draw(ctx);
 
     // Dust particles
-    for (const p of particles) p.draw(ctx);
+    for (const p of particles) p.draw(ctx, sprites.dust);
   }
 
   // ── Animation loop ──────────────────────────────────────────────

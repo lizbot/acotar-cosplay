@@ -1,0 +1,12 @@
+.env
+.env.*
+!.env.example
+__pycache__/
+.airtable-cache.json
+.DS_Store
+.tools/
+node_modules/
+dist/
+
+.image-cache.json
+.image-cache.json.tmp

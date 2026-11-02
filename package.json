@@ -1,0 +1,16 @@
+{
+  "name": "a-court-of-cosplay",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=24" },
+  "scripts": {
+    "sync": "node scripts/sync-airtable.mjs",
+    "build": "node scripts/build.mjs",
+    "build:snapshot": "node scripts/build.mjs --snapshot",
+    "preview": "node scripts/preview.mjs",
+    "start": "npm run build:snapshot && npm run preview",
+    "refresh": "npm run build",
+    "test": "node --test tests/*.test.mjs"
+  }
+}
